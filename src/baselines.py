@@ -1,5 +1,4 @@
-"""Baselines: local-only y centralizado."""
-import copy
+# Baselines: local-only (cota inferior) y centralizado (cota superior).
 import json
 import numpy as np
 import torch
@@ -10,22 +9,8 @@ from .model import get_model
 from .train_utils import local_train, evaluate
 
 
-def run_local_only(
-    client_train_ds: list,
-    global_test_ds,
-    client_test_ds: list,
-    rounds: int,
-    local_epochs: int,
-    lr: float,
-    batch_size: int,
-    device: torch.device,
-    pretrained: bool = True,
-    seed: int = 42,
-) -> dict:
-    """Cada hospital entrena su propio modelo de forma aislada.
-
-    Cota inferior: muestra lo que consigue cada hospital sin colaboración.
-    """
+# Cada hospital entrena su propio modelo de forma aislada, sin colaboración
+def run_local_only(client_train_ds: list, global_test_ds, client_test_ds: list, rounds: int, local_epochs: int, lr: float, batch_size: int, device: torch.device, pretrained: bool = True, seed: int = 42) -> dict:
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -34,7 +19,7 @@ def run_local_only(
 
     for k, (train_ds, test_ds) in enumerate(zip(client_train_ds, client_test_ds), start=1):
         model = get_model(pretrained=pretrained).to(device)
-        model = local_train(model, train_ds, total_epochs, lr, batch_size, device, mu=0.0)
+        model, _ = local_train(model, train_ds, total_epochs, lr, batch_size, device, mu=0.0)
         metrics = evaluate(model, test_ds, device)
         print(f"  Hospital {k}: AUC={metrics['auc']:.4f} F1={metrics['f1']:.4f} Sen={metrics['sensitivity']:.4f}")
         results.append({"hospital": k, **metrics})
@@ -47,22 +32,8 @@ def run_local_only(
     }
 
 
-def run_centralized(
-    client_train_ds: list,
-    global_test_ds,
-    client_test_ds: list,
-    rounds: int,
-    local_epochs: int,
-    lr: float,
-    batch_size: int,
-    device: torch.device,
-    pretrained: bool = True,
-    seed: int = 42,
-) -> dict:
-    """Todos los datos juntos en un servidor central.
-
-    Cota superior: ignora la privacidad, muestra el mejor rendimiento posible.
-    """
+# Todos los datos juntos en un servidor central; ignora privacidad
+def run_centralized(client_train_ds: list, global_test_ds, client_test_ds: list, rounds: int, local_epochs: int, lr: float, batch_size: int, device: torch.device, pretrained: bool = True, seed: int = 42) -> dict:
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -70,7 +41,7 @@ def run_centralized(
     total_epochs = rounds * local_epochs
 
     model = get_model(pretrained=pretrained).to(device)
-    model = local_train(model, all_train, total_epochs, lr, batch_size, device, mu=0.0)
+    model, _ = local_train(model, all_train, total_epochs, lr, batch_size, device, mu=0.0)
 
     final_g = evaluate(model, global_test_ds, device)
     final_c = [evaluate(model, ds, device) for ds in client_test_ds]

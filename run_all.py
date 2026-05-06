@@ -1,16 +1,6 @@
-"""Ejecuta todos los experimentos del Proyecto 6 y guarda resultados en results/.
-
-Uso:
-    uv run python run_all.py [--dry-run] [--only local|centralized|fedavg|fedprox]
-
-Orden de experimentos:
-  1. local_only   — cota inferior (cada hospital por separado)
-  2. centralized  — cota superior (todos los datos juntos)
-  3. fedavg       — FedAvg con R=50, E=5, K=4
-  4. fedprox      — FedProx con mu=0.1, mismos hiperparámetros
-
-Para cada experimento federado se repite con 3 semillas y se promedia.
-"""
+# Ejecuta todos los experimentos del Proyecto 6 y guarda resultados en results/.
+# Uso: uv run python run_all.py [--dry-run] [--only local|centralized|fedavg|fedprox|fedavg_simple|fedprox_simple]
+# Experimentos federados se repiten con 3 semillas; baselines con 1 semilla.
 import argparse
 import json
 import sys
@@ -23,8 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.config import (
     HOSPITAL_TRAIN_CSVS, GLOBAL_TEST_CSV, DATA_ROOT, RESULTS_DIR,
-    N_CLIENTS, ROUNDS, LOCAL_EPOCHS, LR, BATCH_SIZE, IMG_SIZE,
-    SEEDS, MU_FEDPROX,
+    ROUNDS, LOCAL_EPOCHS, LR, BATCH_SIZE, IMG_SIZE, SEEDS, MU_FEDPROX,
 )
 from src.dataset import load_client_datasets, load_test_datasets
 from src.baselines import run_local_only, run_centralized, save_results as save
@@ -33,11 +22,18 @@ from src.federated import run_federated
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Dispositivo: {DEVICE}")
 
+FEDERATED_EXPERIMENTS = {
+    "fedavg":        {"mu": 0.0,        "aggregation": "weighted"},
+    "fedprox":       {"mu": MU_FEDPROX, "aggregation": "weighted"},
+    "fedavg_simple": {"mu": 0.0,        "aggregation": "simple"},
+    "fedprox_simple":{"mu": MU_FEDPROX, "aggregation": "simple"},
+}
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="Solo 2 rondas, 1 semilla, para verificar")
-    parser.add_argument("--only", choices=["local", "centralized", "fedavg", "fedprox"], default=None)
+    parser.add_argument("--dry-run", action="store_true", help="Solo 2 rondas, 1 semilla")
+    parser.add_argument("--only", choices=["local", "centralized"] + list(FEDERATED_EXPERIMENTS), default=None)
     args = parser.parse_args()
 
     rounds = 2 if args.dry_run else ROUNDS
@@ -73,9 +69,13 @@ def main():
         )
         save(res, RESULTS_DIR / "centralized.json")
 
-    # --- 3. FedAvg ---
-    if run in (None, "fedavg"):
-        print("\n=== FedAvg ===")
+    # --- 3-6. Experimentos federados ---
+    for exp_name, exp_cfg in FEDERATED_EXPERIMENTS.items():
+        if run not in (None, exp_name):
+            continue
+        mu  = exp_cfg["mu"]
+        agg = exp_cfg["aggregation"]
+        print(f"\n=== {exp_name} (mu={mu}, agregación={agg}) ===")
         seed_results = []
         for seed in seeds:
             print(f"\n  Semilla {seed}")
@@ -83,47 +83,34 @@ def main():
                 client_train, global_test, client_test,
                 rounds=rounds, local_epochs=LOCAL_EPOCHS,
                 lr=LR, batch_size=BATCH_SIZE, device=DEVICE,
-                mu=0.0, seed=seed,
+                mu=mu, aggregation=agg, seed=seed,
             )
             seed_results.append(res)
-        agg = _aggregate_seeds(seed_results)
-        save({"seeds": seed_results, "aggregated": agg}, RESULTS_DIR / "fedavg.json")
-
-    # --- 4. FedProx ---
-    if run in (None, "fedprox"):
-        print(f"\n=== FedProx (mu={MU_FEDPROX}) ===")
-        seed_results = []
-        for seed in seeds:
-            print(f"\n  Semilla {seed}")
-            res = run_federated(
-                client_train, global_test, client_test,
-                rounds=rounds, local_epochs=LOCAL_EPOCHS,
-                lr=LR, batch_size=BATCH_SIZE, device=DEVICE,
-                mu=MU_FEDPROX, seed=seed,
-            )
-            seed_results.append(res)
-        agg = _aggregate_seeds(seed_results)
-        save({"seeds": seed_results, "aggregated": agg}, RESULTS_DIR / "fedprox.json")
+        agg_stats = _aggregate_seeds(seed_results)
+        save({"seeds": seed_results, "aggregated": agg_stats}, RESULTS_DIR / f"{exp_name}.json")
 
     print("\nTodos los experimentos completados. Resultados en results/")
 
 
 def _aggregate_seeds(seed_results: list) -> dict:
-    """Promedia métricas finales sobre semillas."""
+    # Promedia métricas finales sobre semillas
     def mean_std(vals):
-        return {"mean": float(np.mean(vals)), "std": float(np.std(vals))}
+        clean = [v for v in vals if not np.isnan(v)]
+        return {"mean": float(np.mean(clean)) if clean else float("nan"),
+                "std":  float(np.std(clean))  if clean else float("nan")}
 
-    global_aucs = [r["final_global"]["auc"] for r in seed_results]
-    global_f1s  = [r["final_global"]["f1"]  for r in seed_results]
-    global_sens = [r["final_global"]["sensitivity"] for r in seed_results]
+    global_aucs = [r["final_global"].get("auc", float("nan")) for r in seed_results]
+    global_f1s  = [r["final_global"].get("f1",  float("nan")) for r in seed_results]
+    global_sens = [r["final_global"].get("sensitivity", float("nan")) for r in seed_results]
     equities    = [r["equity_auc"] for r in seed_results]
 
     return {
-        "global_auc":  mean_std(global_aucs),
-        "global_f1":   mean_std(global_f1s),
-        "global_sen":  mean_std(global_sens),
-        "equity_auc":  mean_std(equities),
-        "comm_bytes_per_round": seed_results[0]["comm_bytes_per_round"],
+        "global_auc": mean_std(global_aucs),
+        "global_f1":  mean_std(global_f1s),
+        "global_sen": mean_std(global_sens),
+        "equity_auc": mean_std(equities),
+        "comm_bytes_per_round": seed_results[0].get("comm_bytes_per_round", 0),
+        "n_params": seed_results[0].get("n_params", 0),
     }
 
 

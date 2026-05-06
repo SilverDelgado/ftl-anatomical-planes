@@ -1,122 +1,76 @@
-"""Simulación de FedAvg y FedProx.
-
-Algoritmo FedAvg (McMahan et al. 2017):
-  w_global ← w_global + Σ_k (n_k/N) * Δw_k
-  donde Δw_k = w_k_local - w_global
-
-Algoritmo FedProx (Li et al. 2020):
-  Igual que FedAvg pero cada cliente minimiza:
-  L_k(w) + (μ/2) ||w - w_global||²
-  El término proximal ancla los pesos locales al global,
-  reduciendo el client drift causado por heterogeneidad.
-"""
-import copy
+# Entrenamiento federado vía Flower simulation (FedAvg / FedProx).
+# Usa flwr.simulation.run_simulation con ClientApp / ServerApp (API Flower 1.13+).
 import json
 import numpy as np
 import torch
-from tqdm import tqdm
 from pathlib import Path
+from flwr.simulation import run_simulation
 
 from .model import get_model
-from .train_utils import local_train, evaluate
+from .train_utils import evaluate as eval_fn
+from .fl_client import make_client_app
+from .fl_server import make_server_app, ndarrays_to_model
 
 
-def _fedavg_aggregate(global_model: torch.nn.Module, deltas: list, sizes: list):
-    """Agregación ponderada por tamaño de dataset (FedAvg estándar)."""
-    global_sd = global_model.state_dict()
-    total = sum(sizes)
-    new_sd = {k: torch.zeros_like(v, dtype=torch.float32) for k, v in global_sd.items()}
-
-    for delta, n in zip(deltas, sizes):
-        w = n / total
-        for k in new_sd:
-            new_sd[k] += w * (global_sd[k].float() + delta[k].float())
-
-    # Restaurar dtype original
-    for k in global_sd:
-        new_sd[k] = new_sd[k].to(global_sd[k].dtype)
-
-    global_model.load_state_dict(new_sd)
-    return global_model
-
-
-def run_federated(
-    client_train_ds: list,
-    global_test_ds,
-    client_test_ds: list,
-    rounds: int,
-    local_epochs: int,
-    lr: float,
-    batch_size: int,
-    device: torch.device,
-    mu: float = 0.0,
-    pretrained: bool = True,
-    seed: int = 42,
-    verbose: bool = True,
-) -> dict:
-    """Ejecuta entrenamiento federado (FedAvg si mu=0, FedProx si mu>0).
-
-    Devuelve un dict con:
-      - history: curvas por ronda
-      - final: métricas finales (global + por cliente + equidad)
-      - comm_bytes_per_round: coste de comunicación
-    """
+def run_federated(client_train_ds: list, global_test_ds, client_test_ds: list, rounds: int, local_epochs: int, lr: float, batch_size: int, device: torch.device, mu: float = 0.0, aggregation: str = "weighted", pretrained: bool = True, seed: int = 42, verbose: bool = False) -> dict:
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    global_model = get_model(pretrained=pretrained).to(device)
-
-    # Coste de comunicación: envío + recepción de todos los parámetros (float32)
-    n_params = sum(p.numel() for p in global_model.parameters())
-    comm_bytes = 2 * n_params * 4  # bytes por ronda por cliente
-
-    history = {
-        "round": [], "global_auc": [], "global_f1": [], "global_sen": [],
-        "client_aucs": [], "equity_auc": [],
+    # Configuración que el servidor envía a cada cliente en cada ronda
+    fit_config = {
+        "local_epochs": local_epochs,
+        "lr": lr,
+        "batch_size": batch_size,
+        # proximal_mu lo añade FedProx automáticamente; en FedAvg lo lee el cliente como 0.0
+        "proximal_mu": mu,
     }
 
-    for r in tqdm(range(rounds), desc=f"[seed={seed} mu={mu}] Rondas"):
-        global_sd = copy.deepcopy(global_model.state_dict())
-        deltas, sizes = [], []
+    # state es un dict mutable compartido: fl_server.py lo rellena durante la simulación
+    state: dict = {}
 
-        for ds in client_train_ds:
-            local_model = copy.deepcopy(global_model)
-            local_model = local_train(local_model, ds, local_epochs, lr, batch_size, device, mu=mu)
+    client_app = make_client_app(client_train_ds, client_test_ds)
+    server_app = make_server_app(
+        global_test_ds=global_test_ds,
+        rounds=rounds,
+        mu=mu,
+        aggregation=aggregation,
+        fit_config=fit_config,
+        device=device,
+        state=state,
+        pretrained=pretrained,
+    )
 
-            local_sd = local_model.cpu().state_dict()
-            delta = {k: (local_sd[k].float() - global_sd[k].float()).cpu() for k in global_sd}
-            deltas.append(delta)
-            sizes.append(len(ds))
+    n_gpus = 0.25 if torch.cuda.is_available() else 0.0
+    run_simulation(
+        server_app=server_app,
+        client_app=client_app,
+        num_supernodes=len(client_train_ds),
+        backend_config={"client_resources": {"num_cpus": 1, "num_gpus": n_gpus}},
+        verbose_logging=verbose,
+    )
 
-        global_model = _fedavg_aggregate(global_model, deltas, sizes)
+    # Evaluación final por cliente con los parámetros de la última ronda
+    last_params = state.get("last_params", [])
+    final_g: dict = {}
+    final_c: list = []
+    equity = float("nan")
 
-        # Evaluación
-        g_metrics = evaluate(global_model, global_test_ds, device)
-        c_metrics  = [evaluate(global_model, ds, device) for ds in client_test_ds]
-        c_aucs     = [m["auc"] for m in c_metrics]
+    if last_params:
+        final_model = ndarrays_to_model(last_params, device)
+        final_g = eval_fn(final_model, global_test_ds, device)
+        final_c = [eval_fn(final_model, ds, device) for ds in client_test_ds]
+        valid_aucs = [m["auc"] for m in final_c if not np.isnan(m["auc"])]
+        equity = float(np.std(valid_aucs)) if valid_aucs else float("nan")
 
-        history["round"].append(r + 1)
-        history["global_auc"].append(g_metrics["auc"])
-        history["global_f1"].append(g_metrics["f1"])
-        history["global_sen"].append(g_metrics["sensitivity"])
-        history["client_aucs"].append(c_aucs)
-        history["equity_auc"].append(float(np.std(c_aucs)))
-
-        if verbose:
-            print(
-                f"  R{r+1:3d} | AUC={g_metrics['auc']:.4f} "
-                f"| equity={history['equity_auc'][-1]:.4f} "
-                f"| clients={[f'{a:.3f}' for a in c_aucs]}"
-            )
-
-    final_g = evaluate(global_model, global_test_ds, device)
-    final_c = [evaluate(global_model, ds, device) for ds in client_test_ds]
+    # Coste de comunicación: 2 × nparams × 4 bytes (float32) por ronda
+    n_params = sum(p.numel() for p in get_model(pretrained=False).parameters())
+    comm_bytes = 2 * n_params * 4
 
     return {
-        "history": history,
+        "history": state.get("history", {}),
         "final_global": final_g,
         "final_clients": final_c,
-        "equity_auc": float(np.std([m["auc"] for m in final_c])),
+        "equity_auc": equity,
         "comm_bytes_per_round": comm_bytes,
         "n_params": n_params,
     }

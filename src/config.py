@@ -3,7 +3,7 @@ from pathlib import Path
 # --- Rutas ---
 P6_DIR      = Path(__file__).parent.parent
 PROYECTO_DIR = P6_DIR.parent
-DATA_ROOT   = PROYECTO_DIR                         # image_path en CSV es relativa a aquí
+DATA_ROOT   = P6_DIR                               # image_path en CSV es relativa a aquí (data/ está en p6/)
 CSVS_DIR    = PROYECTO_DIR / "federated_csvs" / "06_hfl_cls_plane_comparison_flair"
 RESULTS_DIR = P6_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)

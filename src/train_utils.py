@@ -1,67 +1,59 @@
-"""Entrenamiento local y evaluación."""
-import copy
+# Entrenamiento local y evaluación.
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from sklearn.metrics import roc_auc_score, f1_score, recall_score
 
+from .dataset import get_dataloader
 
-def local_train(
-    model: nn.Module,
-    dataset,
-    epochs: int,
-    lr: float,
-    batch_size: int,
-    device: torch.device,
-    mu: float = 0.0,
-) -> nn.Module:
-    """Entrena el modelo localmente.
 
-    mu=0   → entrenamiento estándar (FedAvg).
-    mu>0   → añade término proximal FedProx: (mu/2)*||w - w_global||^2.
-              w_global se fija como los pesos al inicio de esta función.
-    """
+# mu=0 → FedAvg; mu>0 → término proximal FedProx: (mu/2)*||w - w_global||^2
+# Devuelve (model, avg_train_loss_ultima_epoca)
+def local_train(model: nn.Module, dataset, epochs: int, lr: float, batch_size: int, device: torch.device, mu: float = 0.0):
     model = model.to(device)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                        num_workers=0, pin_memory=False)
+    loader = get_dataloader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.BCEWithLogitsLoss()
 
-    # Captura estado global para FedProx
+    # w_global fijado al inicio — punto de anclaje del término proximal
     global_params = [p.detach().clone() for p in model.parameters()] if mu > 0 else None
 
     model.train()
+    epoch_losses = []
     for _ in range(epochs):
+        batch_losses = []
         for X, y in loader:
             X, y = X.to(device), y.to(device).unsqueeze(1)
             optimizer.zero_grad()
             loss = criterion(model(X), y)
-
             if mu > 0:
                 prox = sum(
                     ((p - pg.to(device)) ** 2).sum()
                     for p, pg in zip(model.parameters(), global_params)
                 )
                 loss = loss + (mu / 2.0) * prox
-
             loss.backward()
             optimizer.step()
+            batch_losses.append(loss.item())
+        epoch_losses.append(float(np.mean(batch_losses)))
 
-    return model
+    return model, float(np.mean(epoch_losses))
 
 
+# Devuelve {'auc', 'f1', 'sensitivity', 'val_loss'}
 @torch.no_grad()
 def evaluate(model: nn.Module, dataset, device: torch.device, batch_size: int = 128) -> dict:
-    """Calcula AUC-ROC, F1 y sensibilidad (recall clase MS=1)."""
     model.eval()
     model.to(device)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    loader = get_dataloader(dataset, batch_size=batch_size, shuffle=False)
+    criterion = nn.BCEWithLogitsLoss()
 
-    probs_list, labels_list = [], []
+    probs_list, labels_list, losses = [], [], []
     for X, y in loader:
-        logits = model(X.to(device)).squeeze(1).cpu()
-        probs_list.extend(torch.sigmoid(logits).numpy())
+        X_dev, y_dev = X.to(device), y.to(device)
+        logits = model(X_dev).squeeze(1)
+        losses.append(criterion(logits, y_dev.float()).item())
+        probs_list.extend(torch.sigmoid(logits).cpu().numpy())
         labels_list.extend(y.numpy())
 
     probs  = np.array(probs_list)
@@ -72,4 +64,4 @@ def evaluate(model: nn.Module, dataset, device: torch.device, batch_size: int = 
     f1  = float(f1_score(labels, preds, zero_division=0))
     sen = float(recall_score(labels, preds, pos_label=1, zero_division=0))
 
-    return {"auc": float(auc), "f1": f1, "sensitivity": sen}
+    return {"auc": float(auc), "f1": f1, "sensitivity": sen, "val_loss": float(np.mean(losses))}

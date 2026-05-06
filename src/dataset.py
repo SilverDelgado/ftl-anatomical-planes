@@ -1,4 +1,4 @@
-"""Dataset para imágenes MRI FLAIR del proyecto 6."""
+# Dataset para imágenes MRI FLAIR del proyecto 6.
 from pathlib import Path
 import pandas as pd
 from PIL import Image
@@ -23,11 +23,8 @@ def get_transform(train: bool, img_size: int = 224) -> T.Compose:
     return T.Compose(steps)
 
 
+# Columnas relevantes del CSV: image_path (relativa a data_root), label_id (0/1)
 class MSDataset(Dataset):
-    """Carga slices MRI desde un CSV del proyecto 6.
-
-    Columnas relevantes del CSV: image_path (relativa a data_root), label_id (0/1).
-    """
 
     def __init__(self, csv_path: Path, data_root: Path, train: bool = True, img_size: int = 224):
         self.df        = pd.read_csv(csv_path)
@@ -54,16 +51,28 @@ class MSDataset(Dataset):
         return self.transform(img), label
 
 
+# Fábrica de DataLoader. Centraliza la configuración (num_workers, pin_memory, etc.)
+def get_dataloader(dataset: Dataset, batch_size: int, shuffle: bool = True, num_workers: int = 0):
+    from torch.utils.data import DataLoader
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=False,
+        drop_last=False,
+    )
+
+
 def load_client_datasets(csvs, data_root, img_size=224):
-    """Devuelve lista de MSDataset, uno por hospital."""
     return [MSDataset(csv, data_root, train=True, img_size=img_size) for csv in csvs]
 
 
 def load_test_datasets(global_test_csv, data_root, img_size=224):
-    """Devuelve (global_ds, [hospital_1_ds, ..., hospital_4_ds])."""
-    df_global  = pd.read_csv(global_test_csv)
-    global_ds  = MSDataset.from_df(df_global, data_root, train=False, img_size=img_size)
-    client_ds  = [
+    # Devuelve (global_ds, [h1_ds, h2_ds, h3_ds, h4_ds]) para evaluación
+    df_global = pd.read_csv(global_test_csv)
+    global_ds = MSDataset.from_df(df_global, data_root, train=False, img_size=img_size)
+    client_ds = [
         MSDataset.from_df(df_global[df_global["hospital_id"] == k], data_root, train=False, img_size=img_size)
         for k in range(1, 5)
     ]
