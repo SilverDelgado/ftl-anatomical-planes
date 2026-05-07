@@ -1,5 +1,3 @@
-# Flower client para el Proyecto 6.
-# MSClient: NumPyClient que envuelve local_train y evaluate de train_utils.py
 from collections import OrderedDict
 import numpy as np
 import torch
@@ -17,19 +15,21 @@ class MSClient(NumPyClient):
         self.train_ds = train_ds
         self.test_ds = test_ds
         self.device = device
-        # Sin pesos preentrenados: el servidor los distribuye en la ronda 0
+        # sin pesos preentrenados porque el servidor los distribuye en la ronda 0
         self.model = get_model(pretrained=False)
 
     def get_parameters(self, config):
-        # Serializa state_dict completo (pesos + buffers BN)
-        return [val.cpu().numpy() for val in self.model.state_dict().values()]
+        params = []
+        for tensor in self.model.state_dict().values():
+            params.append(tensor.cpu().numpy())
+        return params
 
     def set_parameters(self, parameters):
         orig = self.model.state_dict()
         keys = list(orig.keys())
-        state_dict = OrderedDict(
-            {k: torch.tensor(arr, dtype=orig[k].dtype) for k, arr in zip(keys, parameters)}
-        )
+        state_dict = OrderedDict()
+        for k, arr in zip(keys, parameters):
+            state_dict[k] = torch.tensor(arr, dtype=orig[k].dtype)
         self.model.load_state_dict(state_dict, strict=True)
 
     def fit(self, parameters, config):

@@ -1,6 +1,4 @@
-# Ejecuta todos los experimentos del Proyecto 6 y guarda resultados en results/.
-# Uso: uv run python run_all.py [--dry-run] [--only local|centralized|fedavg|fedprox|fedavg_simple|fedprox_simple]
-# Experimentos federados se repiten con 3 semillas; baselines con 1 semilla.
+# uv run python run_all.py [--only local|centralized|fedavg|fedprox|fedavg_simple|fedprox_simple]
 import argparse
 import json
 import sys
@@ -32,12 +30,11 @@ FEDERATED_EXPERIMENTS = {
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="Solo 2 rondas, 1 semilla")
     parser.add_argument("--only", choices=["local", "centralized"] + list(FEDERATED_EXPERIMENTS), default=None)
     args = parser.parse_args()
 
-    rounds = 2 if args.dry_run else ROUNDS
-    seeds  = [SEEDS[0]] if args.dry_run else SEEDS
+    rounds = ROUNDS
+    seeds  = SEEDS
 
     print("Cargando datasets...")
     client_train = load_client_datasets(HOSPITAL_TRAIN_CSVS, DATA_ROOT, IMG_SIZE)
@@ -49,7 +46,7 @@ def main():
 
     run = args.only
 
-    # --- 1. Local-only ---
+    # Local only
     if run in (None, "local"):
         print("\n=== Local-only (cota inferior) ===")
         res = run_local_only(
@@ -59,7 +56,7 @@ def main():
         )
         save(res, RESULTS_DIR / "local_only.json")
 
-    # --- 2. Centralizado ---
+    # Centralizado
     if run in (None, "centralized"):
         print("\n=== Centralizado (cota superior) ===")
         res = run_centralized(
@@ -69,7 +66,7 @@ def main():
         )
         save(res, RESULTS_DIR / "centralized.json")
 
-    # --- 3-6. Experimentos federados ---
+    # Experimentos AF
     for exp_name, exp_cfg in FEDERATED_EXPERIMENTS.items():
         if run not in (None, exp_name):
             continue
@@ -89,20 +86,25 @@ def main():
         agg_stats = _aggregate_seeds(seed_results)
         save({"seeds": seed_results, "aggregated": agg_stats}, RESULTS_DIR / f"{exp_name}.json")
 
-    print("\nTodos los experimentos completados. Resultados en results/")
+    print("Todos los experimentos completados. Resultados en results/")
 
 
 def _aggregate_seeds(seed_results: list) -> dict:
-    # Promedia métricas finales sobre semillas
+    # Promedio metricas finales sobre seeds
     def mean_std(vals):
         clean = [v for v in vals if not np.isnan(v)]
         return {"mean": float(np.mean(clean)) if clean else float("nan"),
                 "std":  float(np.std(clean))  if clean else float("nan")}
 
-    global_aucs = [r["final_global"].get("auc", float("nan")) for r in seed_results]
-    global_f1s  = [r["final_global"].get("f1",  float("nan")) for r in seed_results]
-    global_sens = [r["final_global"].get("sensitivity", float("nan")) for r in seed_results]
-    equities    = [r["equity_auc"] for r in seed_results]
+    global_aucs = []
+    global_f1s = []
+    global_sens = []
+    equities = []
+    for r in seed_results:
+        global_aucs.append(r["final_global"].get("auc", float("nan")))
+        global_f1s.append(r["final_global"].get("f1", float("nan")))
+        global_sens.append(r["final_global"].get("sensitivity", float("nan")))
+        equities.append(r["equity_auc"])
 
     return {
         "global_auc": mean_std(global_aucs),
