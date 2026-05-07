@@ -6,7 +6,5 @@ results/*.json
 results/*.png
 notebooks/.ipynb_checkpoints/
 *.log
-CLAUDE.md
-PLAN.md
 data/**
 COMANDOS.md
