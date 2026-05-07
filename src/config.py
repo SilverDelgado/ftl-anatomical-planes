@@ -19,7 +19,7 @@ LOCAL_EPOCHS = 5
 LR = 1e-4 # finetuning ResNet18 pretrained
 BATCH_SIZE = 32
 IMG_SIZE = 224
-SEEDS = [42, 123, 456]
+SEEDS = [42, 123, 456] #3 entrenamientos copmletos cada uno con un seed
 
 # FedProx
 MU_FEDPROX   = 0.1
