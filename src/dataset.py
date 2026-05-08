@@ -5,18 +5,25 @@ import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as T
 
-# Estadísticas ImageNet, donde se preentrenó Resnet18, entonces normalizamos dataset porque el modelo espera esta distriubcion de entrada
+# Estadísticas ImageNet, donde se preentrenó ResNet18: normalizamos para que la
+# distribución de entrada coincida con la que espera el modelo preentrenado.
 _MEAN = [0.485, 0.456, 0.406]
 _STD  = [0.229, 0.224, 0.225]
 
 
 def get_transform(train: bool, img_size: int = 224) -> T.Compose:
-    steps = [T.Resize((img_size, img_size))] #resize a 224x224
+    # Pipeline:
+    # 1) resize a img_size x img_size
+    # 2) (solo en train) flip horizontal
+    # 3) ToTensor -> (1, img_size, img_size)
+    # 4) replicar canal -> (3, img_size, img_size) para ResNet preentrenado en RGB
+    # 5) normalizar con stats de ImageNet
+    steps = [T.Resize((img_size, img_size))]
     if train:
         steps.append(T.RandomHorizontalFlip())
     steps += [
-        T.ToTensor(), #(1,124,124)
-        T.Lambda(lambda x: x.repeat(3, 1, 1)), # escala de grises a 3 canales.. ResNet18 se entrenó para RGB, por eso pasamos a 3 canales (3,124,124)
+        T.ToTensor(),
+        T.Lambda(lambda x: x.repeat(3, 1, 1)),
         T.Normalize(_MEAN, _STD),
     ]
     return T.Compose(steps)

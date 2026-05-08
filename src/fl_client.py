@@ -39,6 +39,13 @@ class MSClient(NumPyClient):
         lr = float(config.get("lr", LR))
         batch_size = int(config.get("batch_size", BATCH_SIZE))
 
+        # Sembrar RNG dentro del worker Ray. torch.manual_seed en el proceso
+        # principal NO se hereda al actor; sin esto la reproducibilidad por
+        # semilla solo afectaría a la inicialización inicial de pesos.
+        seed = int(config.get("seed", 0)) + self.cid + int(config.get("server_round", 0))
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
         self.model, train_loss = local_train(
             self.model, self.train_ds, epochs, lr, batch_size, self.device, mu=mu
         )

@@ -18,8 +18,10 @@ def run_federated(client_train_ds: list, global_test_ds, client_test_ds: list, r
         "local_epochs": local_epochs,
         "lr": lr,
         "batch_size": batch_size,
-        # proximal_mu lo añade FedProx, en FedAvg lo lee el cliente como 0.0
+        # proximal_mu lo usa FedProx, en FedAvg lo lee el cliente como 0.0
         "proximal_mu": mu,
+        # seed para que el cliente siembre su RNG (Ray actor) de forma reproducible
+        "seed": int(seed),
     }
 
     # state lo rellena fl server en la simulacion
@@ -28,6 +30,7 @@ def run_federated(client_train_ds: list, global_test_ds, client_test_ds: list, r
     client_app = make_client_app(client_train_ds, client_test_ds)
     server_app = make_server_app(
         global_test_ds=global_test_ds,
+        client_test_ds=client_test_ds, # para calcular equity_auc por ronda
         rounds=rounds,
         mu=mu,
         aggregation=aggregation,
@@ -37,7 +40,8 @@ def run_federated(client_train_ds: list, global_test_ds, client_test_ds: list, r
         pretrained=pretrained,
     )
 
-    n_gpus = 0.25 if torch.cuda.is_available() else 0.0
+    # num_gpus=1.0 para que Ray ejecute un solo cliente a la vez en GPU
+    n_gpus = 1.0 if torch.cuda.is_available() else 0.0
     run_simulation(
         server_app=server_app,
         client_app=client_app,

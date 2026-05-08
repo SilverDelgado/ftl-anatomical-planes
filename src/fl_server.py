@@ -65,10 +65,13 @@ class FedProxSimple(FedProx):
         return super().aggregate_fit(server_round, results_eq, failures)
 
 # aggregation: weighted, simple
-def make_server_app(global_test_ds, rounds: int, mu: float, aggregation: str, fit_config: dict, device: torch.device, state: dict, pretrained: bool = True) -> ServerApp:
+def make_server_app(global_test_ds, client_test_ds: list, rounds: int, mu: float, aggregation: str, fit_config: dict, device: torch.device, state: dict, pretrained: bool = True) -> ServerApp:
     state.setdefault("history", {
         "round": [], "global_val_loss": [],
         "global_auc": [], "global_f1": [], "global_sen": [],
+        # equity_auc por ronda: std de los AUC por hospital. Lo necesita
+        # notebooks/analysis.ipynb (celda 8) para la curva de equidad.
+        "equity_auc": [],
         "train_loss": [],
     })
 
@@ -83,12 +86,21 @@ def make_server_app(global_test_ds, rounds: int, mu: float, aggregation: str, fi
         state["last_params"] = list(parameters)
         model = ndarrays_to_model(parameters, device)
         m = evaluate(model, global_test_ds, device)
+        # Equidad por ronda: evaluamos el modelo agregado en el test de cada
+        # hospital y guardamos la std de los AUCs (excluyendo NaN)
+        client_aucs = []
+        for ds in client_test_ds:
+            cm = evaluate(model, ds, device)
+            if not np.isnan(cm["auc"]):
+                client_aucs.append(cm["auc"])
+        equity = float(np.std(client_aucs)) if client_aucs else float("nan")
         h = state["history"]
         h["round"].append(server_round)
         h["global_val_loss"].append(m["val_loss"])
         h["global_auc"].append(m["auc"])
         h["global_f1"].append(m["f1"])
         h["global_sen"].append(m["sensitivity"])
+        h["equity_auc"].append(equity)
         return m["val_loss"], {"global_auc": m["auc"], "global_f1": m["f1"], "global_sen": m["sensitivity"]}
 
     def fit_metrics_agg(metrics_list):
@@ -97,7 +109,10 @@ def make_server_app(global_test_ds, rounds: int, mu: float, aggregation: str, fi
         return agg
 
     def on_fit_config_fn(server_round):
-        return fit_config
+        # Inyectamos server_round para que el cliente pueda mezclarlo en su seed
+        cfg = dict(fit_config)
+        cfg["server_round"] = int(server_round)
+        return cfg
 
     common_kwargs = dict(
         initial_parameters=initial_parameters,

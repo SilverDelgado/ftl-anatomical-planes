@@ -39,9 +39,12 @@ def run_local_only(client_train_ds: list, global_test_ds, client_test_ds: list, 
             formatted.append(f"{a:.4f}")
         print(f"  Ronda {r}/{rounds} — AUCs: {formatted}", flush=True)
 
+    # Las métricas finales ya están en hist (último elemento de cada lista),
+    # las recogemos en lugar de re-evaluar el modelo
     final_results = []
-    for k, (hist, test_ds) in enumerate(zip(client_histories, client_test_ds), start=1):
-        m = evaluate(models[k-1], test_ds, device)
+    for k, hist in enumerate(client_histories, start=1):
+        m = {"auc": hist["auc"][-1], "f1": hist["f1"][-1],
+             "sensitivity": hist["sensitivity"][-1], "val_loss": hist["val_loss"][-1]}
         print(f"  Hospital {k}: AUC={m['auc']:.4f} F1={m['f1']:.4f} Sen={m['sensitivity']:.4f}")
         final_results.append({"hospital": k, **m})
 
