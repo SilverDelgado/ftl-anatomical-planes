@@ -7,23 +7,20 @@ CSVS_DIR = PROYECTO_DIR / "federated_csvs" / "06_hfl_cls_plane_comparison_flair"
 RESULTS_DIR = P6_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
-HOSPITAL_TRAIN_CSVS = []
-for k in range(1, 5):
-    HOSPITAL_TRAIN_CSVS.append(CSVS_DIR / f"hospital_{k}_train.csv")
+HOSPITAL_TRAIN_CSVS = [CSVS_DIR / f"hospital_{k}_train.csv" for k in range(1, 5)]
 GLOBAL_TEST_CSV = CSVS_DIR / "global_test.csv"
 
-# hiperparams
 N_CLIENTS = 4
-ROUNDS = 20
+ROUNDS = 5
 LOCAL_EPOCHS = 5
-LR = 1e-4 # finetuning ResNet18 pretrained
+LR = 1e-4
 BATCH_SIZE = 32
 IMG_SIZE = 224
-SEEDS = [42]
+SEEDS = [42, 123]
 
-# FedProx
-MU_FEDPROX   = 0.1
+MU_FEDPROX = 0.1
+BETA_FEDAVGM = 0.9
+SERVER_LR = 1.0
 
-#labels
-MS_CLASS      = 1 # label_id=1 -> esclerosis múltiple (EM)
-CONTROL_CLASS = 0 # label_id=0 -> control (sin EM)
+MS_CLASS = 1
+CONTROL_CLASS = 0

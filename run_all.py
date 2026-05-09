@@ -1,6 +1,4 @@
-# uv run python run_all.py [--only local|centralized|fedavg|fedprox|fedavg_simple|fedprox_simple]
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -11,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.config import (
     HOSPITAL_TRAIN_CSVS, GLOBAL_TEST_CSV, DATA_ROOT, RESULTS_DIR,
-    ROUNDS, LOCAL_EPOCHS, LR, BATCH_SIZE, IMG_SIZE, SEEDS, MU_FEDPROX,
+    ROUNDS, LOCAL_EPOCHS, LR, BATCH_SIZE, IMG_SIZE, SEEDS,
+    MU_FEDPROX, BETA_FEDAVGM, SERVER_LR,
 )
 from src.dataset import load_client_datasets, load_test_datasets
 from src.baselines import run_local_only, run_centralized, save_results as save
@@ -21,10 +20,9 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Dispositivo: {DEVICE}")
 
 FEDERATED_EXPERIMENTS = {
-    "fedavg":        {"mu": 0.0,        "aggregation": "weighted"},
-    "fedprox":       {"mu": MU_FEDPROX, "aggregation": "weighted"},
-    "fedavg_simple": {"mu": 0.0,        "aggregation": "simple"},
-    "fedprox_simple":{"mu": MU_FEDPROX, "aggregation": "simple"},
+    "fedavg":  {"algorithm": "fedavg",  "mu": 0.0,        "server_momentum": 0.0,          "server_lr": 1.0},
+    "fedprox": {"algorithm": "fedprox", "mu": MU_FEDPROX, "server_momentum": 0.0,          "server_lr": 1.0},
+    "fedavgm": {"algorithm": "fedavgm", "mu": 0.0,        "server_momentum": BETA_FEDAVGM, "server_lr": SERVER_LR},
 }
 
 
@@ -34,7 +32,7 @@ def main():
     args = parser.parse_args()
 
     rounds = ROUNDS
-    seeds  = SEEDS
+    seeds = SEEDS
 
     print("Cargando datasets...")
     client_train = load_client_datasets(HOSPITAL_TRAIN_CSVS, DATA_ROOT, IMG_SIZE)
@@ -46,33 +44,32 @@ def main():
 
     run = args.only
 
-    # Local only
+    models_dir = RESULTS_DIR / "models"
+
     if run in (None, "local"):
-        print("\n=== Local-only (cota inferior) ===")
+        print("\n=== Local-only ===")
         res = run_local_only(
             client_train, global_test, client_test,
             rounds=rounds, local_epochs=LOCAL_EPOCHS,
             lr=LR, batch_size=BATCH_SIZE, device=DEVICE, seed=seeds[0],
+            weights_dir=models_dir,
         )
         save(res, RESULTS_DIR / "local_only.json")
 
-    # Centralizado
     if run in (None, "centralized"):
-        print("\n=== Centralizado (cota superior) ===")
+        print("\n=== Centralizado ===")
         res = run_centralized(
             client_train, global_test, client_test,
             rounds=rounds, local_epochs=LOCAL_EPOCHS,
             lr=LR, batch_size=BATCH_SIZE, device=DEVICE, seed=seeds[0],
+            weights_save_path=models_dir / "centralized.pt",
         )
         save(res, RESULTS_DIR / "centralized.json")
 
-    # Experimentos AF
     for exp_name, exp_cfg in FEDERATED_EXPERIMENTS.items():
         if run not in (None, exp_name):
             continue
-        mu  = exp_cfg["mu"]
-        agg = exp_cfg["aggregation"]
-        print(f"\n=== {exp_name} (mu={mu}, agregación={agg}) ===")
+        print(f"\n=== {exp_name} ({exp_cfg}) ===")
         seed_results = []
         for seed in seeds:
             print(f"\n  Semilla {seed}")
@@ -80,7 +77,9 @@ def main():
                 client_train, global_test, client_test,
                 rounds=rounds, local_epochs=LOCAL_EPOCHS,
                 lr=LR, batch_size=BATCH_SIZE, device=DEVICE,
-                mu=mu, aggregation=agg, seed=seed,
+                seed=seed,
+                weights_save_path=models_dir / f"{exp_name}_seed{seed}.pt",
+                **exp_cfg,
             )
             seed_results.append(res)
         agg_stats = _aggregate_seeds(seed_results)
@@ -89,31 +88,21 @@ def main():
     print("Todos los experimentos completados. Resultados en results/")
 
 
-def _aggregate_seeds(seed_results: list) -> dict:
-    # Promedio metricas finales sobre seeds
+def _aggregate_seeds(seed_results):
     def mean_std(vals):
         clean = [v for v in vals if not np.isnan(v)]
         return {"mean": float(np.mean(clean)) if clean else float("nan"),
                 "std":  float(np.std(clean))  if clean else float("nan")}
 
-    global_aucs = []
-    global_f1s = []
-    global_sens = []
-    equities = []
-    for r in seed_results:
-        global_aucs.append(r["final_global"].get("auc", float("nan")))
-        global_f1s.append(r["final_global"].get("f1", float("nan")))
-        global_sens.append(r["final_global"].get("sensitivity", float("nan")))
-        equities.append(r["equity_auc"])
+    metric_keys = ["auc", "f1", "sensitivity", "specificity", "accuracy"]
+    aggregated = {}
+    for k in metric_keys:
+        aggregated[f"global_{k}"] = mean_std([r["final_global"].get(k, float("nan")) for r in seed_results])
 
-    return {
-        "global_auc": mean_std(global_aucs),
-        "global_f1":  mean_std(global_f1s),
-        "global_sen": mean_std(global_sens),
-        "equity_auc": mean_std(equities),
-        "comm_bytes_per_round": seed_results[0].get("comm_bytes_per_round", 0),
-        "n_params": seed_results[0].get("n_params", 0),
-    }
+    aggregated["equity_auc"] = mean_std([r["equity_auc"] for r in seed_results])
+    aggregated["comm_bytes_per_round"] = seed_results[0].get("comm_bytes_per_round", 0)
+    aggregated["n_params"] = seed_results[0].get("n_params", 0)
+    return aggregated
 
 
 if __name__ == "__main__":

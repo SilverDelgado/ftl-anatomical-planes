@@ -2,7 +2,6 @@ from collections import OrderedDict
 import numpy as np
 import torch
 from flwr.client import NumPyClient, ClientApp
-from flwr.common import Context
 
 from .model import get_model
 from .train_utils import local_train, evaluate
@@ -10,25 +9,20 @@ from .config import LR, BATCH_SIZE
 
 
 class MSClient(NumPyClient):
-    def __init__(self, cid: int, train_ds, test_ds, device: torch.device):
+    def __init__(self, cid, train_ds, test_ds, device):
         self.cid = cid
         self.train_ds = train_ds
         self.test_ds = test_ds
         self.device = device
-        # sin pesos preentrenados porque el servidor los distribuye en la ronda 0
         self.model = get_model(pretrained=False)
 
     def get_parameters(self, config):
-        params = []
-        for tensor in self.model.state_dict().values():
-            params.append(tensor.cpu().numpy())
-        return params
+        return [tensor.cpu().numpy() for tensor in self.model.state_dict().values()]
 
     def set_parameters(self, parameters):
         orig = self.model.state_dict()
-        keys = list(orig.keys())
         state_dict = OrderedDict()
-        for k, arr in zip(keys, parameters):
+        for k, arr in zip(orig.keys(), parameters):
             state_dict[k] = torch.tensor(arr, dtype=orig[k].dtype)
         self.model.load_state_dict(state_dict, strict=True)
 
@@ -39,9 +33,6 @@ class MSClient(NumPyClient):
         lr = float(config.get("lr", LR))
         batch_size = int(config.get("batch_size", BATCH_SIZE))
 
-        # Sembrar RNG dentro del worker Ray. torch.manual_seed en el proceso
-        # principal NO se hereda al actor; sin esto la reproducibilidad por
-        # semilla solo afectaría a la inicialización inicial de pesos.
         seed = int(config.get("seed", 0)) + self.cid + int(config.get("server_round", 0))
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -58,13 +49,15 @@ class MSClient(NumPyClient):
             "auc": metrics["auc"],
             "f1": metrics["f1"],
             "sensitivity": metrics["sensitivity"],
+            "specificity": metrics["specificity"],
+            "accuracy": metrics["accuracy"],
         }
 
 
-def make_client_app(train_datasets: list, test_datasets: list) -> ClientApp:
+def make_client_app(train_datasets, test_datasets):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def client_fn(context: Context):
+    def client_fn(context):
         cid = int(context.node_config["partition-id"])
         return MSClient(cid, train_datasets[cid], test_datasets[cid], device).to_client()
 

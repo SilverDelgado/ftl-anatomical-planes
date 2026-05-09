@@ -1,6 +1,3 @@
-# Visualizador del dataset del Proyecto 6.
-# Uso: uv run python visualize_dataset.py
-# Genera: grid de muestras, distribución de clases, comparación de planos anatómicos
 import sys
 from pathlib import Path
 import pandas as pd
@@ -9,7 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import HOSPITAL_TRAIN_CSVS, GLOBAL_TEST_CSV, DATA_ROOT, RESULTS_DIR
 
 PLANES  = {1: "Axial", 2: "Coronal", 3: "Sagital", 4: "Mixto"}

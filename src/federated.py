@@ -1,7 +1,6 @@
 import json
 import numpy as np
 import torch
-from pathlib import Path
 from flwr.simulation import run_simulation
 
 from .model import get_model
@@ -9,38 +8,36 @@ from .train_utils import evaluate as eval_fn
 from .fl_client import make_client_app
 from .fl_server import make_server_app, ndarrays_to_model
 
-def run_federated(client_train_ds: list, global_test_ds, client_test_ds: list, rounds: int, local_epochs: int, lr: float, batch_size: int, device: torch.device, mu: float = 0.0, aggregation: str = "weighted", pretrained: bool = True, seed: int = 42, verbose: bool = False) -> dict:
+
+def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local_epochs, lr, batch_size, device, algorithm="fedavg", mu=0.0, server_momentum=0.0, server_lr=1.0, pretrained=True, seed=42, verbose=False, weights_save_path=None):
     torch.manual_seed(seed)
     np.random.seed(seed)
-    # Entrenamiento federado con Flower simulation (FedAvg / FedProx).
-    # Configuración que el servidor envia a cada cliente en cada ronda
+
     fit_config = {
         "local_epochs": local_epochs,
         "lr": lr,
         "batch_size": batch_size,
-        # proximal_mu lo usa FedProx, en FedAvg lo lee el cliente como 0.0
         "proximal_mu": mu,
-        # seed para que el cliente siembre su RNG (Ray actor) de forma reproducible
         "seed": int(seed),
     }
 
-    # state lo rellena fl server en la simulacion
-    state: dict = {}
+    state = {}
 
     client_app = make_client_app(client_train_ds, client_test_ds)
     server_app = make_server_app(
         global_test_ds=global_test_ds,
-        client_test_ds=client_test_ds, # para calcular equity_auc por ronda
+        client_test_ds=client_test_ds,
         rounds=rounds,
-        mu=mu,
-        aggregation=aggregation,
+        algorithm=algorithm,
         fit_config=fit_config,
         device=device,
         state=state,
+        mu=mu,
+        server_momentum=server_momentum,
+        server_lr=server_lr,
         pretrained=pretrained,
     )
 
-    # num_gpus=1.0 para que Ray ejecute un solo cliente a la vez en GPU
     n_gpus = 1.0 if torch.cuda.is_available() else 0.0
     run_simulation(
         server_app=server_app,
@@ -50,25 +47,26 @@ def run_federated(client_train_ds: list, global_test_ds, client_test_ds: list, r
         verbose_logging=verbose,
     )
 
-    # eval por cliente con los parms de la ultima ronda
     last_params = state.get("last_params", [])
-    final_g: dict = {}
-    final_c: list = []
+    final_g = {}
+    final_c = []
     equity = float("nan")
 
+    weights_path_str = None
     if last_params:
         final_model = ndarrays_to_model(last_params, device)
-        final_g = eval_fn(final_model, global_test_ds, device)
-        final_c = []
-        for ds in client_test_ds:
-            final_c.append(eval_fn(final_model, ds, device))
-        valid_aucs = []
-        for m in final_c:
-            if not np.isnan(m["auc"]):
-                valid_aucs.append(m["auc"])
+        final_g = eval_fn(final_model, global_test_ds, device, return_probs=True)
+        final_c = [eval_fn(final_model, ds, device, return_probs=True) for ds in client_test_ds]
+        valid_aucs = [m["auc"] for m in final_c if not np.isnan(m["auc"])]
         equity = float(np.std(valid_aucs)) if valid_aucs else float("nan")
 
-    # coste de comunicacion= 2 x numero params × 4 bytes (float32) por ronda
+        if weights_save_path is not None:
+            from pathlib import Path
+            weights_save_path = Path(weights_save_path)
+            weights_save_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(final_model.state_dict(), weights_save_path)
+            weights_path_str = str(weights_save_path)
+
     n_params = sum(p.numel() for p in get_model(pretrained=False).parameters())
     comm_bytes = 2 * n_params * 4
 
@@ -79,10 +77,15 @@ def run_federated(client_train_ds: list, global_test_ds, client_test_ds: list, r
         "equity_auc": equity,
         "comm_bytes_per_round": comm_bytes,
         "n_params": n_params,
+        "algorithm": algorithm,
+        "mu": mu,
+        "server_momentum": server_momentum,
+        "seed": seed,
+        "weights_path": weights_path_str,
     }
 
 
-def save_results(results: dict, path: Path):
+def save_results(results, path):
     with open(path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Resultados guardados en {path}")
