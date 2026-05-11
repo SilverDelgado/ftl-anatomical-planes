@@ -1,10 +1,5 @@
-.venv/
+.venv/**
+data/**
 __pycache__/
-*.pyc
-*.pyo
 results/*.json
 results/*.png
-notebooks/.ipynb_checkpoints/
-*.log
-data/**
-COMANDOS.md

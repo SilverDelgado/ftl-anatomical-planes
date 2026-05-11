@@ -20,8 +20,6 @@ def load_raw_image(img_path: str) -> np.ndarray:
     return np.array(Image.open(DATA_ROOT / img_path).convert("L"))
 
 
-# ── 1. Muestras de imágenes por hospital y clase ──────────────────────────────
-
 def plot_sample_grid(n_per_class: int = 4):
     fig = plt.figure(figsize=(16, 10))
     fig.suptitle("Muestras del dataset por hospital y clase", fontsize=14, fontweight="bold")
@@ -50,7 +48,7 @@ def plot_sample_grid(n_per_class: int = 4):
         plane_name = df["plane_profile"].iloc[0] if "plane_profile" in df.columns else PLANES[h_idx+1]
         fig.text(
             0.01, outer[h_idx].get_position(fig).y1 - 0.01,
-            f"Hospital {h_idx+1} — {PLANES[h_idx+1]} ({plane_name})",
+            f"Hospital {h_idx+1} - {PLANES[h_idx+1]} ({plane_name})",
             fontsize=9, fontweight="bold", va="top",
         )
 
@@ -60,23 +58,28 @@ def plot_sample_grid(n_per_class: int = 4):
     print(f"Guardado: {out}")
 
 
-# ── 2. Distribución de clases por hospital ────────────────────────────────────
-
 def plot_class_distribution():
     fig, axes = plt.subplots(1, 5, figsize=(15, 4))
     fig.suptitle("Distribución de clases por hospital (train)", fontsize=13, fontweight="bold")
 
-    all_dfs = [pd.read_csv(csv) for csv in HOSPITAL_TRAIN_CSVS]
+    all_dfs = []
+    for csv in HOSPITAL_TRAIN_CSVS:
+        all_dfs.append(pd.read_csv(csv))
     combined = pd.concat(all_dfs)
 
     datasets = [*zip(range(1, 5), all_dfs)] + [(0, combined)]
 
     for ax, (h_id, df) in zip(axes, datasets):
         counts = df["label_id"].value_counts().sort_index()
+        class_labels = []
+        bar_colors = []
+        for i in counts.index:
+            class_labels.append(CLASSES[i])
+            bar_colors.append(COLORS[i])
         bars = ax.bar(
-            [CLASSES[i] for i in counts.index],
+            class_labels,
             counts.values,
-            color=[COLORS[i] for i in counts.index],
+            color=bar_colors,
             edgecolor="white", linewidth=0.5,
         )
         for bar, v in zip(bars, counts.values):
@@ -98,8 +101,6 @@ def plot_class_distribution():
     print(f"Guardado: {out}")
 
 
-# ── 3. Comparación visual de los tres planos para el mismo paciente ───────────
-
 def plot_plane_comparison():
     dfs = {k: pd.read_csv(csv) for k, csv in enumerate(HOSPITAL_TRAIN_CSVS, 1)}
 
@@ -111,7 +112,7 @@ def plot_plane_comparison():
     common = (pats_h1 & pats_h2 & pats_h3 & ms_pats_h1)
 
     if not common:
-        print("No hay pacientes comunes entre H1, H2 y H3 — mostrando pacientes distintos por plano.")
+        print("No hay pacientes comunes entre H1, H2 y H3, se muestran pacientes distintos por plano.")
         rows = {
             k: dfs[k][dfs[k]["label_id"]==1].sample(1, random_state=42).iloc[0]
             for k in [1, 2, 3]
@@ -132,7 +133,7 @@ def plot_plane_comparison():
             ax.imshow(img, cmap="gray")
         except Exception as e:
             ax.text(0.5, 0.5, str(e), ha="center", va="center", wrap=True, fontsize=7)
-        ax.set_title(f"Hospital {k} — {PLANES[k]}\n{row['patient_id']}", fontsize=10)
+        ax.set_title(f"Hospital {k} - {PLANES[k]}\n{row['patient_id']}", fontsize=10)
         ax.axis("off")
 
     plt.tight_layout()
@@ -142,11 +143,9 @@ def plot_plane_comparison():
     print(f"Guardado: {out}")
 
 
-# ── 4. Resumen estadístico del dataset ────────────────────────────────────────
-
 def print_dataset_summary():
     print("\n" + "="*60)
-    print("RESUMEN DEL DATASET — PROYECTO 6")
+    print("RESUMEN DEL DATASET - PROYECTO 6")
     print("="*60)
 
     all_rows = []

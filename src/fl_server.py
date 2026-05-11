@@ -4,7 +4,7 @@ from collections import OrderedDict
 import numpy as np
 import torch
 from flwr.server import ServerApp, ServerConfig, ServerAppComponents
-from flwr.server.strategy import FedAvg, FedProx, FedAvgM
+from flwr.server.strategy import FedAvg, FedProx
 from flwr.common import Context, ndarrays_to_parameters
 
 from .model import get_model
@@ -12,7 +12,10 @@ from .train_utils import evaluate
 
 
 def model_to_ndarrays(model):
-    return [val.cpu().numpy() for val in model.state_dict().values()]
+    arrays = []
+    for val in model.state_dict().values():
+        arrays.append(val.cpu().numpy())
+    return arrays
 
 
 def ndarrays_to_model(ndarrays, device):
@@ -26,14 +29,19 @@ def ndarrays_to_model(ndarrays, device):
 
 
 def weighted_average(metrics_list):
-    total = sum(n for n, _ in metrics_list)
+    total = 0
+    for n, _ in metrics_list:
+        total = total + n
     result = {}
     for key in metrics_list[0][1]:
-        result[key] = sum(n * float(m[key]) for n, m in metrics_list) / total
+        weighted = 0.0
+        for n, m in metrics_list:
+            weighted = weighted + n * float(m[key])
+        result[key] = weighted / total
     return result
 
 
-def make_server_app(global_test_ds, client_test_ds, rounds, algorithm, fit_config, device, state, mu=0.0, server_momentum=0.0, server_lr=1.0, pretrained=True):
+def make_server_app(global_test_ds, client_test_ds, rounds, algorithm, fit_config, device, state, mu=0.0, pretrained=True):
     state.setdefault("history", {
         "round": [],
         "global_val_loss": [],
@@ -51,6 +59,8 @@ def make_server_app(global_test_ds, client_test_ds, rounds, algorithm, fit_confi
         "per_client_spe": [],
         "per_client_acc": [],
         "per_client_loss": [],
+        "per_client_train_loss_per_epoch": [],
+        "per_client_val_loss_per_epoch": [],
     })
     state["_t0"] = time.time()
 
@@ -61,9 +71,22 @@ def make_server_app(global_test_ds, client_test_ds, rounds, algorithm, fit_confi
         state["last_params"] = list(parameters)
         model = ndarrays_to_model(parameters, device)
         m = evaluate(model, global_test_ds, device)
-        client_metrics = [evaluate(model, ds, device) for ds in client_test_ds]
-        client_aucs = [cm["auc"] for cm in client_metrics if not np.isnan(cm["auc"])]
+        client_metrics = []
+        for ds in client_test_ds:
+            client_metrics.append(evaluate(model, ds, device))
+        client_aucs = []
+        for cm in client_metrics:
+            if not np.isnan(cm["auc"]):
+                client_aucs.append(cm["auc"])
         equity = float(np.std(client_aucs)) if client_aucs else float("nan")
+        pc_auc, pc_f1, pc_sen, pc_spe, pc_acc, pc_loss = [], [], [], [], [], []
+        for cm in client_metrics:
+            pc_auc.append(cm["auc"])
+            pc_f1.append(cm["f1"])
+            pc_sen.append(cm["sensitivity"])
+            pc_spe.append(cm["specificity"])
+            pc_acc.append(cm["accuracy"])
+            pc_loss.append(cm["val_loss"])
         h = state["history"]
         h["round"].append(server_round)
         h["global_val_loss"].append(m["val_loss"])
@@ -74,12 +97,12 @@ def make_server_app(global_test_ds, client_test_ds, rounds, algorithm, fit_confi
         h["global_acc"].append(m["accuracy"])
         h["equity_auc"].append(equity)
         h["wall_time"].append(time.time() - state["_t0"])
-        h["per_client_auc"].append([cm["auc"] for cm in client_metrics])
-        h["per_client_f1"].append([cm["f1"] for cm in client_metrics])
-        h["per_client_sen"].append([cm["sensitivity"] for cm in client_metrics])
-        h["per_client_spe"].append([cm["specificity"] for cm in client_metrics])
-        h["per_client_acc"].append([cm["accuracy"] for cm in client_metrics])
-        h["per_client_loss"].append([cm["val_loss"] for cm in client_metrics])
+        h["per_client_auc"].append(pc_auc)
+        h["per_client_f1"].append(pc_f1)
+        h["per_client_sen"].append(pc_sen)
+        h["per_client_spe"].append(pc_spe)
+        h["per_client_acc"].append(pc_acc)
+        h["per_client_loss"].append(pc_loss)
         return m["val_loss"], {
             "global_auc": m["auc"],
             "global_f1": m["f1"],
@@ -89,9 +112,33 @@ def make_server_app(global_test_ds, client_test_ds, rounds, algorithm, fit_confi
         }
 
     def fit_metrics_agg(metrics_list):
-        agg = weighted_average(metrics_list)
-        state["history"]["train_loss"].append(agg.get("train_loss", float("nan")))
-        return agg
+        n_total = 0
+        for n, _ in metrics_list:
+            n_total = n_total + n
+        weighted_loss = 0.0
+        for n, m in metrics_list:
+            weighted_loss = weighted_loss + n * float(m["train_loss"])
+        avg_train_loss = weighted_loss / n_total
+        state["history"]["train_loss"].append(avg_train_loss)
+
+        pc_train, pc_val = [], []
+        for _, m in metrics_list:
+            s_t = m.get("train_loss_per_epoch", "")
+            s_v = m.get("val_loss_per_epoch", "")
+            t_list = []
+            for x in s_t.split(","):
+                if x:
+                    t_list.append(float(x))
+            v_list = []
+            for x in s_v.split(","):
+                if x:
+                    v_list.append(float(x))
+            pc_train.append(t_list)
+            pc_val.append(v_list)
+        state["history"]["per_client_train_loss_per_epoch"].append(pc_train)
+        state["history"]["per_client_val_loss_per_epoch"].append(pc_val)
+
+        return {"train_loss": avg_train_loss}
 
     def on_fit_config_fn(server_round):
         cfg = dict(fit_config)
@@ -115,8 +162,6 @@ def make_server_app(global_test_ds, client_test_ds, rounds, algorithm, fit_confi
         strategy = FedAvg(**common_kwargs)
     elif algorithm == "fedprox":
         strategy = FedProx(proximal_mu=mu, **common_kwargs)
-    elif algorithm == "fedavgm":
-        strategy = FedAvgM(server_momentum=server_momentum, server_learning_rate=server_lr, **common_kwargs)
     else:
         raise ValueError(f"algorithm desconocido: {algorithm}")
 

@@ -17,7 +17,10 @@ class MSClient(NumPyClient):
         self.model = get_model(pretrained=False)
 
     def get_parameters(self, config):
-        return [tensor.cpu().numpy() for tensor in self.model.state_dict().values()]
+        params = []
+        for tensor in self.model.state_dict().values():
+            params.append(tensor.cpu().numpy())
+        return params
 
     def set_parameters(self, parameters):
         orig = self.model.state_dict()
@@ -32,15 +35,29 @@ class MSClient(NumPyClient):
         epochs = int(config.get("local_epochs", 5))
         lr = float(config.get("lr", LR))
         batch_size = int(config.get("batch_size", BATCH_SIZE))
+        grad_clip = float(config.get("grad_clip", 1.0))
+        weight_decay = float(config.get("weight_decay", 0.0))
 
         seed = int(config.get("seed", 0)) + self.cid + int(config.get("server_round", 0))
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        self.model, train_loss = local_train(
-            self.model, self.train_ds, epochs, lr, batch_size, self.device, mu=mu
+        self.model, train_loss, train_pe, val_pe = local_train(
+            self.model, self.train_ds, epochs, lr, batch_size, self.device,
+            mu=mu, val_dataset=self.test_ds, grad_clip=grad_clip,
+            weight_decay=weight_decay,
         )
-        return self.get_parameters(config={}), len(self.train_ds), {"train_loss": train_loss}
+        train_parts = []
+        for x in train_pe:
+            train_parts.append(f"{x:.6f}")
+        val_parts = []
+        for x in val_pe:
+            val_parts.append(f"{x:.6f}")
+        return self.get_parameters(config={}), len(self.train_ds), {
+            "train_loss": train_loss,
+            "train_loss_per_epoch": ",".join(train_parts),
+            "val_loss_per_epoch": ",".join(val_parts),
+        }
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)

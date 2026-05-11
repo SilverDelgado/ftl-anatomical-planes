@@ -7,7 +7,9 @@ CSVS_DIR = PROYECTO_DIR / "federated_csvs" / "06_hfl_cls_plane_comparison_flair"
 RESULTS_DIR = P6_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
-HOSPITAL_TRAIN_CSVS = [CSVS_DIR / f"hospital_{k}_train.csv" for k in range(1, 5)]
+HOSPITAL_TRAIN_CSVS = []
+for k in range(1, 5):
+    HOSPITAL_TRAIN_CSVS.append(CSVS_DIR / f"hospital_{k}_train.csv")
 GLOBAL_TEST_CSV = CSVS_DIR / "global_test.csv"
 
 N_CLIENTS = 4
@@ -19,8 +21,7 @@ IMG_SIZE = 224
 SEEDS = [42, 123]
 
 MU_FEDPROX = 0.1
-BETA_FEDAVGM = 0.9
-SERVER_LR = 1.0
+GRAD_CLIP_NORM = 1.0
 
 MS_CLASS = 1
 CONTROL_CLASS = 0

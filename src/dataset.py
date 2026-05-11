@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset as TorchDataset, DataLoader
 import torchvision.transforms as T
 
 _MEAN = [0.485, 0.456, 0.406]
@@ -21,7 +21,7 @@ def get_transform(train, img_size=224):
     return T.Compose(steps)
 
 
-class MSDataset(Dataset):
+class Dataset(TorchDataset):
     def __init__(self, csv_path, data_root, train=True, img_size=224):
         self.df = pd.read_csv(csv_path)
         self.data_root = Path(data_root)
@@ -57,14 +57,17 @@ def get_dataloader(dataset, batch_size, shuffle=True, num_workers=0):
 
 
 def load_client_datasets(csvs, data_root, img_size=224):
-    return [MSDataset(csv, data_root, train=True, img_size=img_size) for csv in csvs]
+    datasets = []
+    for csv in csvs:
+        datasets.append(Dataset(csv, data_root, train=True, img_size=img_size))
+    return datasets
 
 
 def load_test_datasets(global_test_csv, data_root, img_size=224):
     df_global = pd.read_csv(global_test_csv)
-    global_ds = MSDataset.from_df(df_global, data_root, train=False, img_size=img_size)
-    client_ds = [
-        MSDataset.from_df(df_global[df_global["hospital_id"] == k], data_root, train=False, img_size=img_size)
-        for k in range(1, 5)
-    ]
+    global_ds = Dataset.from_df(df_global, data_root, train=False, img_size=img_size)
+    client_ds = []
+    for k in range(1, 5):
+        df_k = df_global[df_global["hospital_id"] == k]
+        client_ds.append(Dataset.from_df(df_k, data_root, train=False, img_size=img_size))
     return global_ds, client_ds
