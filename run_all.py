@@ -8,7 +8,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.config import (
-    HOSPITAL_TRAIN_CSVS, GLOBAL_TEST_CSV, DATA_ROOT, RESULTS_DIR, P6_DIR,
+    HOSPITAL_TRAIN_CSVS, GLOBAL_TEST_CSV, DATA_ROOT, RESULTS_DIR,
     ROUNDS, LOCAL_EPOCHS, LR, BATCH_SIZE, IMG_SIZE, SEEDS,
     MU_FEDPROX, GRAD_CLIP_NORM,
 )
@@ -28,7 +28,6 @@ FEDERATED_EXPERIMENTS = {
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", choices=["local", "centralized"] + list(FEDERATED_EXPERIMENTS), default=None)
-    parser.add_argument("--scratch", action="store_true", help="Entrenar sin pesos preentrenados de ImageNet")
     parser.add_argument("--results-dir", type=str, default=None, help="Sobrescribir el directorio de salida")
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--local-epochs", type=int, default=None)
@@ -37,20 +36,14 @@ def main():
     parser.add_argument("--rounds", type=int, default=None)
     args = parser.parse_args()
 
-    pretrained = not args.scratch
-    if args.results_dir:
-        results_dir = Path(args.results_dir)
-    elif args.scratch:
-        results_dir = P6_DIR / "results_scratch"
-    else:
-        results_dir = RESULTS_DIR
+    results_dir = Path(args.results_dir) if args.results_dir else RESULTS_DIR
     results_dir.mkdir(parents=True, exist_ok=True)
 
     lr = args.lr if args.lr is not None else LR
     local_epochs = args.local_epochs if args.local_epochs is not None else LOCAL_EPOCHS
     grad_clip = args.grad_clip if args.grad_clip is not None else GRAD_CLIP_NORM
     weight_decay = args.weight_decay
-    print(f"Resultados en: {results_dir}  (pretrained={pretrained})")
+    print(f"Resultados en: {results_dir}")
     print(f"Hyperparams: lr={lr} epochs={local_epochs} grad_clip={grad_clip} weight_decay={weight_decay}")
 
     rounds = args.rounds if args.rounds is not None else ROUNDS
@@ -71,11 +64,11 @@ def main():
     if run in (None, "local"):
         print("\n=== Local-only ===")
         res = run_local_only(
-            client_train, global_test, client_test,
+            client_train, client_test,
             rounds=rounds, local_epochs=local_epochs,
             lr=lr, batch_size=BATCH_SIZE, device=DEVICE, seed=seeds[0],
-            weights_dir=models_dir, pretrained=pretrained,
-            weight_decay=weight_decay,
+            weights_dir=models_dir,
+            weight_decay=weight_decay
         )
         save(res, results_dir / "local_only.json")
 
@@ -85,7 +78,7 @@ def main():
             client_train, global_test, client_test,
             rounds=rounds, local_epochs=local_epochs,
             lr=lr, batch_size=BATCH_SIZE, device=DEVICE, seed=seeds[0],
-            weights_save_path=models_dir / "centralized.pt", pretrained=pretrained,
+            weights_save_path=models_dir / "centralized.pt",
             weight_decay=weight_decay,
         )
         save(res, results_dir / "centralized.json")
@@ -93,7 +86,7 @@ def main():
     for exp_name, exp_cfg in FEDERATED_EXPERIMENTS.items():
         if run not in (None, exp_name):
             continue
-        print(f"\n=== {exp_name} ({exp_cfg}) ===")
+        print(f"{exp_name}, ({exp_cfg})")
         seed_results = []
         for seed in seeds:
             seed_path = results_dir / f"{exp_name}_seed{seed}.json"
@@ -111,9 +104,9 @@ def main():
                 lr=lr, batch_size=BATCH_SIZE, device=DEVICE,
                 seed=seed,
                 weights_save_path=models_dir / f"{exp_name}_seed{seed}.pt",
-                pretrained=pretrained, grad_clip=grad_clip,
+                grad_clip=grad_clip,
                 weight_decay=weight_decay,
-                **exp_cfg,
+                **exp_cfg
             )
             save(res, seed_path)
             seed_results.append(res)

@@ -3,12 +3,13 @@ import time
 import numpy as np
 import torch
 from torch.utils.data import ConcatDataset
+from pathlib import Path
 
 from .config import GRAD_CLIP_NORM
 from .model import get_model
 from .train_utils import local_train, evaluate
 
-def empty_history():
+def empty_history(): #historial vacio para cada cliente para el local only
     return {
         "round": [], "val_loss": [],
         "auc": [], "f1": [], "sensitivity": [], "specificity": [], "accuracy": [],
@@ -17,7 +18,7 @@ def empty_history():
     }
 
 
-def empty_central_history():
+def empty_central_history(): #historial vacio para server centralizado
     return {
         "round": [], "val_loss": [],
         "auc": [], "f1": [], "sensitivity": [], "specificity": [], "accuracy": [],
@@ -28,24 +29,24 @@ def empty_central_history():
     }
 
 
-def run_local_only(client_train_ds, global_test_ds, client_test_ds, rounds, local_epochs, lr, batch_size, device, pretrained=True, seed=42, weights_dir=None, weight_decay=0.0):
+def run_local_only(client_train_ds, client_test_ds, rounds, local_epochs, lr, batch_size, device, seed=42, weights_dir=None, weight_decay=0.0):
     torch.manual_seed(seed)
     np.random.seed(seed)
     t0 = time.time()
 
     client_histories = []
     for _ in client_train_ds:
-        client_histories.append(empty_history())
+        client_histories.append(empty_history()) #inicializamos historial vacio por cliente
     models = []
     for _ in client_train_ds:
-        models.append(get_model(pretrained=pretrained).to(device))
+        models.append(get_model().to(device)) #inicializamos modelo por cliente
 
     for r in range(1, rounds + 1):
         for k, (model, train_ds, test_ds, hist) in enumerate(zip(models, client_train_ds, client_test_ds, client_histories), start=1):
             model, train_loss, train_pe, val_pe = local_train(
                 model, train_ds, local_epochs, lr, batch_size, device, mu=0.0,
                 val_dataset=test_ds, grad_clip=GRAD_CLIP_NORM,
-                weight_decay=weight_decay,
+                weight_decay=weight_decay
             )
             m = evaluate(model, test_ds, device)
             hist["round"].append(r)
@@ -65,12 +66,11 @@ def run_local_only(client_train_ds, global_test_ds, client_test_ds, rounds, loca
         auc_strs = []
         for a in aucs:
             auc_strs.append(f"{a:.4f}")
-        print(f"  Ronda {r}/{rounds} - AUCs: {auc_strs}", flush=True)
+        print(f"Ronda {r}/{rounds} - AUCs: {auc_strs}", flush=True)
 
     final_results = []
     weights_paths = []
     if weights_dir is not None:
-        from pathlib import Path
         weights_dir = Path(weights_dir)
         weights_dir.mkdir(parents=True, exist_ok=True)
 
@@ -95,25 +95,25 @@ def run_local_only(client_train_ds, global_test_ds, client_test_ds, rounds, loca
     }
 
 
-def run_centralized(client_train_ds, global_test_ds, client_test_ds, rounds, local_epochs, lr, batch_size, device, pretrained=True, seed=42, weights_save_path=None, weight_decay=0.0):
+def run_centralized(client_train_ds, global_test_ds, client_test_ds, rounds, local_epochs, lr, batch_size, device, seed=42, weights_save_path=None, weight_decay=0.0):
     torch.manual_seed(seed)
     np.random.seed(seed)
     t0 = time.time()
 
-    all_train = ConcatDataset(client_train_ds)
-    model = get_model(pretrained=pretrained).to(device)
-    history = empty_central_history()
+    all_train = ConcatDataset(client_train_ds) #concateanmos dataset de los clientes para centralizado
+    model = get_model().to(device)
+    history = empty_central_history() #historial centralizado vacio inicializado
 
     for r in range(1, rounds + 1):
         model, train_loss, train_pe, val_pe = local_train(
             model, all_train, local_epochs, lr, batch_size, device, mu=0.0,
             val_dataset=global_test_ds, grad_clip=GRAD_CLIP_NORM,
-            weight_decay=weight_decay,
+            weight_decay=weight_decay
         )
         history["train_loss_per_epoch"].append(train_pe)
         history["val_loss_per_epoch"].append(val_pe)
         m = evaluate(model, global_test_ds, device)
-        cm_per_client = []
+        cm_per_client = [] #client metrics por hospital por ronda
         for ds in client_test_ds:
             cm_per_client.append(evaluate(model, ds, device))
         pc_auc, pc_f1, pc_sen, pc_spe, pc_acc, pc_loss = [], [], [], [], [], []
@@ -139,13 +139,13 @@ def run_centralized(client_train_ds, global_test_ds, client_test_ds, rounds, loc
         history["per_client_spe"].append(pc_spe)
         history["per_client_acc"].append(pc_acc)
         history["per_client_loss"].append(pc_loss)
-        print(f"  Ronda {r}/{rounds} - Global AUC={m['auc']:.4f} F1={m['f1']:.4f}", flush=True)
+        print(f"Ronda {r}/{rounds}. Global AUC={m['auc']:.4f} F1={m['f1']:.4f}", flush=True)
 
     final_g = evaluate(model, global_test_ds, device, return_probs=True)
     final_c = []
     for ds in client_test_ds:
         final_c.append(evaluate(model, ds, device, return_probs=True))
-    print(f"  Global AUC={final_g['auc']:.4f} F1={final_g['f1']:.4f}")
+    print(f"Global AUC={final_g['auc']:.4f} F1={final_g['f1']:.4f}")
 
     weights_path_str = None
     if weights_save_path is not None:

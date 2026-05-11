@@ -1,0 +1,46 @@
+NOTAS DEL PROYECTO P6 - FEDERATED LEARNING SOBRE PLANOS ANATOMICOS
+1. MODELO (src/model.py)
+------------------------
+
+2.1. Capa final nn.Linear(512, 1).
+     - 512 es la dimension de salida del global average pooling de
+       ResNet18, fija por arquitectura.
+     - 1 porque es clasificacion binaria.
+
+Usamos el modelo NO PRE ENTRENADO.
+
+
+2. AVISO "val_dataset" ES EL TEST SET
+---------------------------------------------------------------
+
+2.1. El parametro val_dataset de local_train recibe en TODOS los
+     callers el conjunto de test:
+       - fl_client.py val_dataset=self.test_ds
+       - baselines.py val_dataset=test_ds
+       - baselines.py val_dataset=global_test_ds
+
+2.2. No hay un split de validacion real en el proyecto. Solo hay
+     train (HOSPITAL_TRAIN_CSVS) y test (GLOBAL_TEST_CSV). Lo que
+     en el codigo se llama "val_loss" es en realidad la loss en el
+     test set medida durante el entrenamiento, pero solo lo usamos para ver overfitting, no para decidir (se usa test loss como val loss)
+
+2.3. Implicaciones:
+     - Si las curvas train/val se usan solo para visualizar y
+       diagnosticar overfitting en el informe, esta bien siempre
+       que los hiperparametros (lr, mu, rondas, batch_size) esten
+       fijados de antemano.
+     - Si se usan para decidir hiperparametros (elegir el mu que
+       mejor curva da, eleccion de numero de rondas, etc), hay
+       data leakage: las metricas finales reportadas sobre test
+       estaran sesgadas optimistamente.
+     - Ser explicitos en el informe: lo que llamamos "validacion"
+       es monitorizacion del test, no un split separado.
+
+3. CRITERIOS DE EVALUACION 
+------------------------------------------
+
+Equilibrio entre Sen, Spe, F1, AUC con prioridad clinica a la
+Sensibilidad (un falso negativo en diagnostico medico tiene mayor
+coste que un falso positivo). Vigilar overfitting comparando
+curvas: si train baja pero val/test se queda plana o sube, el
+modelo esta memorizando.

@@ -9,11 +9,11 @@ from .fl_client import make_client_app
 from .fl_server import make_server_app, ndarrays_to_model
 
 
-def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local_epochs, lr, batch_size, device, algorithm="fedavg", mu=0.0, pretrained=True, seed=42, verbose=False, weights_save_path=None, grad_clip=1.0, weight_decay=0.0):
+def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local_epochs, lr, batch_size, device, algorithm="fedavg", mu=0.0, seed=42, verbose=False, weights_save_path=None, grad_clip=1.0, weight_decay=0.0):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    fit_config = {
+    fit_config = { #config que el servidor envia a cada cliente cada ronda
         "local_epochs": local_epochs,
         "lr": lr,
         "batch_size": batch_size,
@@ -23,7 +23,7 @@ def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local
         "seed": int(seed),
     }
 
-    state = {}
+    state = {} #diccionario compartido para que el servidor escriba historial y los ultimos pesos
 
     client_app = make_client_app(client_train_ds, client_test_ds)
     server_app = make_server_app(
@@ -35,11 +35,10 @@ def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local
         device=device,
         state=state,
         mu=mu,
-        pretrained=pretrained,
     )
 
     n_gpus = 1.0 if torch.cuda.is_available() else 0.0
-    run_simulation(
+    run_simulation( #lanza la simulacion federada, Flower orquesta clientes y servidor
         server_app=server_app,
         client_app=client_app,
         num_supernodes=len(client_train_ds),
@@ -47,14 +46,14 @@ def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local
         verbose_logging=verbose,
     )
 
-    last_params = state.get("last_params", [])
+    last_params = state.get("last_params", []) #pesos globales finales tras la ultima ronda
     final_g = {}
     final_c = []
     equity = float("nan")
 
     weights_path_str = None
     if last_params:
-        final_model = ndarrays_to_model(last_params, device)
+        final_model = ndarrays_to_model(last_params, device) #reconstruimos modelo para evaluacion final con return_probs
         final_g = eval_fn(final_model, global_test_ds, device, return_probs=True)
         final_c = []
         for ds in client_test_ds:
@@ -63,7 +62,7 @@ def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local
         for m in final_c:
             if not np.isnan(m["auc"]):
                 valid_aucs.append(m["auc"])
-        equity = float(np.std(valid_aucs)) if valid_aucs else float("nan")
+        equity = float(np.std(valid_aucs)) if valid_aucs else float("nan") #equidad: std de AUCs entre hospitales
 
         if weights_save_path is not None:
             from pathlib import Path
@@ -73,9 +72,9 @@ def run_federated(client_train_ds, global_test_ds, client_test_ds, rounds, local
             weights_path_str = str(weights_save_path)
 
     n_params = 0
-    for p in get_model(pretrained=False).parameters():
+    for p in get_model().parameters():
         n_params = n_params + p.numel()
-    comm_bytes = 2 * n_params * 4
+    comm_bytes = 2 * n_params * 4 #bytes por ronda: subir modelo local + descargar modelo global en float32 (4 bytes por param)
 
     return {
         "history": state.get("history", {}),

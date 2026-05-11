@@ -8,29 +8,29 @@ from .train_utils import local_train, evaluate
 from .config import LR, BATCH_SIZE
 
 
-class MSClient(NumPyClient):
+class Hospital(NumPyClient): #cliente/hospital Flower que tiene modelo y dataset
     def __init__(self, cid, train_ds, test_ds, device):
         self.cid = cid
         self.train_ds = train_ds
         self.test_ds = test_ds
         self.device = device
-        self.model = get_model(pretrained=False)
+        self.model = get_model() #cada cliente tiene su propia copia del modelo
 
-    def get_parameters(self, config):
+    def get_parameters(self, config): #envia pesos del modelo al servidor como lista numpy
         params = []
         for tensor in self.model.state_dict().values():
             params.append(tensor.cpu().numpy())
         return params
 
-    def set_parameters(self, parameters):
+    def set_parameters(self, parameters): #carga los pesos que llegan del servidoren modelo local del cliente
         orig = self.model.state_dict()
         state_dict = OrderedDict()
         for k, arr in zip(orig.keys(), parameters):
             state_dict[k] = torch.tensor(arr, dtype=orig[k].dtype)
         self.model.load_state_dict(state_dict, strict=True)
 
-    def fit(self, parameters, config):
-        self.set_parameters(parameters)
+    def fit(self, parameters, config): #entrenamiento local de una ronda
+        self.set_parameters(parameters) #empezamos desde los pesos globales que llegan del servidor
         mu = float(config.get("proximal_mu", 0.0))
         epochs = int(config.get("local_epochs", 5))
         lr = float(config.get("lr", LR))
@@ -38,28 +38,28 @@ class MSClient(NumPyClient):
         grad_clip = float(config.get("grad_clip", 1.0))
         weight_decay = float(config.get("weight_decay", 0.0))
 
-        seed = int(config.get("seed", 0)) + self.cid + int(config.get("server_round", 0))
+        seed = int(config.get("seed", 0)) + self.cid + int(config.get("server_round", 0)) #seed distinta por cliente y ronda shuffle no se repita
         torch.manual_seed(seed)
         np.random.seed(seed)
 
         self.model, train_loss, train_pe, val_pe = local_train(
             self.model, self.train_ds, epochs, lr, batch_size, self.device,
             mu=mu, val_dataset=self.test_ds, grad_clip=grad_clip,
-            weight_decay=weight_decay,
-        )
+            weight_decay=weight_decay
+        ) #pasamos dataset de test como val pero se usa solo para mirar overfitting no para tomar deicciones sobre params
         train_parts = []
         for x in train_pe:
             train_parts.append(f"{x:.6f}")
         val_parts = []
         for x in val_pe:
             val_parts.append(f"{x:.6f}")
-        return self.get_parameters(config={}), len(self.train_ds), {
+        return self.get_parameters(config={}), len(self.train_ds), { #devolvemos pesos, num muestras (para ponderar en agregacion) y metricas
             "train_loss": train_loss,
-            "train_loss_per_epoch": ",".join(train_parts),
-            "val_loss_per_epoch": ",".join(val_parts),
+            "train_loss_per_epoch": ",".join(train_parts), #strings por comas serparados
+            "val_loss_per_epoch": ",".join(val_parts)
         }
 
-    def evaluate(self, parameters, config):
+    def evaluate(self, parameters, config): #evalua los pesos del servidor en el test local del cliente
         self.set_parameters(parameters)
         metrics = evaluate(self.model, self.test_ds, self.device)
         return metrics["val_loss"], len(self.test_ds), {
@@ -67,15 +67,15 @@ class MSClient(NumPyClient):
             "f1": metrics["f1"],
             "sensitivity": metrics["sensitivity"],
             "specificity": metrics["specificity"],
-            "accuracy": metrics["accuracy"],
+            "accuracy": metrics["accuracy"]
         }
 
 
 def make_client_app(train_datasets, test_datasets):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def client_fn(context):
+    def client_fn(context): #Flower llama a esto para construir cada cliente al iniciar la simulacion
         cid = int(context.node_config["partition-id"])
-        return MSClient(cid, train_datasets[cid], test_datasets[cid], device).to_client()
+        return Hospital(cid, train_datasets[cid], test_datasets[cid], device).to_client()
 
     return ClientApp(client_fn=client_fn)

@@ -1,8 +1,8 @@
 import torch.nn as nn
-from torchvision.models import resnet18, ResNet18_Weights
+from torchvision.models import resnet18
 
-def get_model(pretrained=True):
-    weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+def get_model():
+    weights = None #por si usamos modelo pre entrenado o no
     model = resnet18(weights=weights)
-    model.fc = nn.Linear(512, 1)
+    model.fc = nn.Linear(512, 1) #convertimos salida a una neurona con capa fully conected porque es clasificaicon binaria
     return model

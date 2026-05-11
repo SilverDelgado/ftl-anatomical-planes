@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from torchvision.models import resnet18, ResNet18_Weights
+from torchvision.models import resnet18
 import torchvision.transforms as T
 from scipy.linalg import sqrtm
 from scipy.stats import wasserstein_distance
@@ -86,14 +86,14 @@ class ImagePathDataset(Dataset):
 
 
 def build_encoder():
-    model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+    model = resnet18(weights=None)
     model.fc = nn.Identity()
     model.eval()
     return model.to(DEVICE)
 
 
 def build_classifier():
-    model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+    model = resnet18(weights=None)
     model.fc = nn.Linear(512, 1)
     return model.to(DEVICE)
 
@@ -219,7 +219,7 @@ def main():
             print(f"  H{i}_vs_H{j:<6d} {tv:7.4f} {hh:10.4f} {klp:8.4f} {ws:8.3f}")
 
     print()
-    print(f"Extrayendo embeddings con ResNet-18 (ImageNet) en {DEVICE}...")
+    print(f"Extrayendo embeddings con ResNet-18 sin entrenar en {DEVICE}...")
     encoder = build_encoder()
     plane_emb = {}
     plane_stats = {}
@@ -275,7 +275,7 @@ def main():
         print(f"  H{k}: gradiente shape {g.shape}, ||g||={np.linalg.norm(g):.3f}")
 
     print()
-    print("=== Métricas basadas en gradientes (T6.6.5), modelo ImageNet pretrained ===")
+    print("=== Métricas basadas en gradientes (T6.6.5), ResNet-18 sin entrenar ===")
     print(f"  {'par':12s} {'cos(g_i, g_j)':>15s} {'||g_i - g_j||':>15s}")
     hospital_grad_dists = {}
     cos_matrix = np.eye(4)
@@ -351,7 +351,7 @@ def main():
     axes[1][1].set_xticks(range(4)); axes[1][1].set_yticks(range(4))
     axes[1][1].set_xticklabels(["H1", "H2", "H3", "H4"])
     axes[1][1].set_yticklabels(["H1", "H2", "H3", "H4"])
-    axes[1][1].set_title("cos(grad_i, grad_j), ImageNet pretrained")
+    axes[1][1].set_title("cos(grad_i, grad_j), ResNet-18 sin entrenar")
     for i in range(4):
         for j in range(4):
             axes[1][1].text(j, i, f"{cos_matrix[i, j]:.2f}", ha="center", va="center")
@@ -361,7 +361,7 @@ def main():
     axes[1][2].set_xticks(range(4)); axes[1][2].set_yticks(range(4))
     axes[1][2].set_xticklabels(["H1", "H2", "H3", "H4"])
     axes[1][2].set_yticklabels(["H1", "H2", "H3", "H4"])
-    axes[1][2].set_title("||grad_i - grad_j||, ImageNet pretrained")
+    axes[1][2].set_title("||grad_i - grad_j||, ResNet-18 sin entrenar")
     for i in range(4):
         for j in range(4):
             axes[1][2].text(j, i, f"{div_matrix[i, j]:.1f}", ha="center", va="center", color="white")
