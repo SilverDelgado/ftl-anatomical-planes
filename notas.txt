@@ -36,7 +36,7 @@ Usamos el modelo NO PRE ENTRENADO.
      - Ser explicitos en el informe: lo que llamamos "validacion"
        es monitorizacion del test, no un split separado.
 
-3. CRITERIOS DE EVALUACION 
+3. CRITERIOS DE EVALUACION
 ------------------------------------------
 
 Equilibrio entre Sen, Spe, F1, AUC con prioridad clinica a la
@@ -44,3 +44,141 @@ Sensibilidad (un falso negativo en diagnostico medico tiene mayor
 coste que un falso positivo). Vigilar overfitting comparando
 curvas: si train baja pero val/test se queda plana o sube, el
 modelo esta memorizando.
+
+
+4. ANALISIS Y PRUEBAS PARA EL PAPER
+====================================
+
+Lista de cosas que podemos extraer/mostrar usando los datos del
+entrenamiento + los pesos guardados. Marcado [DATOS YA] = se hace
+sobre los JSON/pesos existentes, [NUEVO RUN] = requiere hacer otro run nuevo
+
+
+--- A. HETEROGENEIDAD ENTRE HOSPITALES ---
+
+4.A.1. [DATOS YA] Histogramas de intensidad de pixel por plano y
+       por hospital. Muestra que axial/coronal/sagital tienen
+       distribuciones de pixel distintas. Ya en
+       diagnose_heterogeneity.py. (a revisar)
+
+4.A.2. [DATOS YA] Distancias de embedding entre hospitales
+       (Frechet, distancia entre medias, similitud coseno) sobre
+       las salidas de ResNet18. la idea es que cuantifica como de
+       parecidos son los datos de cada hospital/cliente en espacio latente. Ya en diagnose_heterogeneity.py. (a revisar)
+
+4.A.3. [DATOS YA] Distancias de Wasserstein y TV entre
+       histogramas de planos. Compara distribuciones marginales
+       entre pares (axial-coronal, axial-sagital, y asi). Ya en
+       diagnose_heterogeneity.py. (a revisar)
+
+4.A.4. [DATOS YA] Cosine similarity y divergencia de gradientes
+       entre hospitales. Mide como de compatibles son los
+       gradientes que cada hospital generaria en su entrenamiento
+       local. Si los gradientes apuntan en direcciones muy
+       distintas, FedAvg sufrira. Ya en
+       diagnose_heterogeneity.py. (a revisar)
+
+--- B. EVALUACION CRUZADA ---
+
+4.B.1. [DATOS YA] Cross-evaluation matrix 4x4 del local-only:
+       cada modelo de hospital evaluado en TODOS los tests de
+       hospitales (no solo en el suyo). Pendiente de implementar.
+       Muestra:
+       - ¿El modelo de H1 (axial) generaliza a H2 (coronal)?
+         Probablemente NO -> evidencia de la heterogeneidad.
+       - H4 (mezcla) probablemente generaliza mejor a los demas
+         que al reves.
+       - Justifica clinicamente por que FL es necesario: hospitales
+         aislados no pueden diagnosticar pacientes con otros planos.
+
+4.B.2. [DATOS YA] Cross-evaluation de los modelos federados:
+       cargar los pesos del modelo global de FedAvg y FedProx
+       (con cada mu) y evaluarlos por hospital. Algunos de estos
+       datos ya estan en final_clients de los JSON, pero un
+       script unificado seria mas comodo.
+
+--- C. CURVAS DE APRENDIZAJE ---
+
+4.C.1. [DATOS YA] Velocidad de convergencia: en que ronda cada
+       metodo converge AUC/F1/Sen. Si FedProx
+       converge mas lento pero mas estable que FedAvg, es
+       info valiosa.
+
+4.C.2. [DATOS YA] AUC, Sen, Spe ronda a ronda comparando metodos.
+       Cuatro lineas (local-only, centralized, FedAvg, FedProx)
+       en un mismo grafico.
+
+--- D. COMPARACION DE METODOS ---
+
+4.D.1. [DATOS YA] Tabla resumen final (la principal del informe):
+       columnas = AUC, Sen, Spe, F1, equity, comm_bytes;
+       filas = local-only, centralized, FedAvg, FedProx-mu0.1,
+       FedProx-mu0.5, FedProx-mu1.0. Medias y std entre seeds.
+
+4.D.2. [DATOS YA] Sensibilidad a mu en FedProx: grafico de
+       AUC/Sen/Spe vs mu. Identifica si hay un sweet spot.
+
+4.D.3. [DATOS YA] Coste de comunicacion: n_params, bytes por
+       ronda, coste total para alcanzar X rendimiento. Permite
+       discutir el trade-off privacidad-vs-comunicacion.
+
+--- E. EQUIDAD ENTRE CLIENTES ---
+
+4.E.1. [DATOS YA] Std de AUC, Sen, Spe, F1 entre hospitales por
+       ronda. Lineas comparando metodos. La pregunta de fondo:
+       "¿FL reduce la desigualdad entre hospitales?".
+
+4.E.2. [DATOS YA] Caso H4 (planos mezclados) en detalle: en
+       local-only Sen=0.92, en centralized Sen=1.0. Pregunta:
+       ¿hasta donde llega FedAvg/FedProx? ¿que mu cierra mas el
+       gap?
+
+
+--- F. ANALISIS DE DECISION/UMBRAL ---
+
+4.F.1. [DATOS YA] Curva ROC completa por hospital y metodo. AUC
+       es solo el area, pero la curva muestra el trade-off Sen/Spe
+       a lo largo de todos los umbrales. Datos en return_probs
+       de evaluate(). Falta script para mostrar.
+
+4.F.2. [DATOS YA] Curva Precision-Recall. Mas informativa que ROC
+       cuando hay desbalance de clases.
+
+
+--- G. CALIBRACION Y ANALISIS DE ERRORES ---
+
+4.G.1. [DATOS YA] Histograma de probabilidades predichas por
+       clase. ¿El modelo dice 0.99 cuando deberia decir 0.7?
+       Datos en return_probs. (idk esta)
+
+4.G.2. [DATOS YA] Reliability diagram (calibration plot): bins de
+       prob predicha vs frecuencia real de positivos. Si esta
+       calibrado, la diagonal.
+
+4.G.3. [DATOS YA] Analisis de errores muestra a muestra: ¿que
+       slices se fallan? ¿hay patron por paciente, plano, slice
+       index? Cruzar con patient_assignment.csv para ver si los
+       errores se concentran en pacientes concretos.
+
+
+--- H. BONUS / SI HAY TIEMPO ---
+
+4.H.1. [NUEVO RUN] Out-of-distribution: entrenar federado solo
+       con H1-H3 (axial, coronal, sagital puros) y evaluar en H4
+       (planos mezclados). Mide la generalizacion a un hospital
+       no visto. Requiere modificar config para excluir H4 del
+       train.
+
+4.H.2. [NUEVO RUN] Barrido mas fino de mu en FedProx (0.2, 0.3
+       intermedios) si el actual (0.1, 0.5, 1.0) sugiere que el
+       optimo esta entre dos puntos.
+
+4.H.3. [NUEVO RUN] Mas seeds (5-10 en lugar de 2) para tener
+       intervalos de confianza estadisticamente robustos. Mas
+       costoso pero da peso al informe.
+
+4.H.4. [NUEVO RUN] Probar el efecto de mas local_epochs (10, 20)
+       o menos (1, 2). Trade-off comunicacion vs convergencia.
+
+4.H.5. [NUEVO RUN] Probar otros optimizadores (SGD con momentum)
+       para comparar con Adam.

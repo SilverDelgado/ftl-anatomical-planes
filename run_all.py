@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.config import (
     HOSPITAL_TRAIN_CSVS, GLOBAL_TEST_CSV, DATA_ROOT, RESULTS_DIR,
     ROUNDS, LOCAL_EPOCHS, LR, BATCH_SIZE, IMG_SIZE, SEEDS,
-    MU_FEDPROX, GRAD_CLIP_NORM,
+    GRAD_CLIP_NORM,
 )
 from src.dataset import load_client_datasets, load_test_datasets
 from src.baselines import run_local_only, run_centralized, save_results as save
@@ -20,8 +20,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Dispositivo: {DEVICE}")
 
 FEDERATED_EXPERIMENTS = {
-    "fedavg":  {"algorithm": "fedavg",  "mu": 0.0},
-    "fedprox": {"algorithm": "fedprox", "mu": MU_FEDPROX},
+    "fedavg":         {"algorithm": "fedavg",  "mu": 0.0},
+    "fedprox_mu0.1":  {"algorithm": "fedprox", "mu": 0.1},
+    "fedprox_mu0.5":  {"algorithm": "fedprox", "mu": 0.5},
+    "fedprox_mu1.0":  {"algorithm": "fedprox", "mu": 1.0},
 }
 
 
